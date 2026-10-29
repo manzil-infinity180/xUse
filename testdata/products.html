@@ -13,6 +13,7 @@
     </select>
     <button type="submit" data-testid="save-product">Save product</button>
   </form>
+  <p id="error" role="alert"></p>
   <ul id="list"></ul>
   <script>
     // Fake API: the row appears 300ms after submit, so replays must wait for it.
@@ -23,6 +24,8 @@
       const price = f.querySelector('[name=price]').value;
       const status = f.querySelector('select').value;
       if (!name) { alert('name required'); return; }
+      if (Number(price) < 0) { document.getElementById('error').textContent = 'Price must be positive'; return; }
+      document.getElementById('error').textContent = '';
       setTimeout(() => {
         const li = document.createElement('li');
         li.textContent = `Created ${name} at $${price} (${status})`;

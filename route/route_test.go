@@ -164,3 +164,56 @@ func asStep(err error, se **route.StepError) bool {
 	*se = e
 	return ok
 }
+
+func TestCasesGoodAndBad(t *testing.T) {
+	p, url := newPage(t)
+	r := &route.Route{Name: "create-product", Params: map[string]string{"name": "x", "price": "1"}, Steps: []route.Step{
+		{Action: "goto", URL: url},
+		{Action: "fill", Value: "{{name}}", Target: &engine.Locator{TestIDAttr: "data-testid", TestID: "product-name", Via: "testid"}},
+		{Action: "fill", Value: "{{price}}", Target: &engine.Locator{TestIDAttr: "data-testid", TestID: "product-price", Via: "testid"}},
+		{Action: "click", Target: &engine.Locator{TestIDAttr: "data-testid", TestID: "save-product", Via: "testid"}},
+		{Action: "expect", Text: "Created {{name}} at ${{price}}"},
+	}}
+	p.Timeout = time.Second
+	cases, err := route.LoadCases("../testdata/cases.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	passed, failed := route.RunCases(p, r, cases, &out)
+	t.Log("\n" + out.String())
+	if passed != 4 || failed != 0 {
+		t.Fatalf("want 4 passed (2 good, 2 rejected bad), got %d passed %d failed", passed, failed)
+	}
+}
+
+// TestHealRewritesLocatorAndRecordsLesson: a stale testid falls back, gets rewritten to
+// the element's current testid, and the next run needs no fallback.
+func TestHealRewritesLocatorAndRecordsLesson(t *testing.T) {
+	p, url := newPage(t)
+	r := &route.Route{Name: "heal", Params: map[string]string{"name": "mug"}, Steps: []route.Step{
+		{Action: "goto", URL: url},
+		{Action: "fill", Value: "{{name}}", Target: &engine.Locator{
+			TestIDAttr: "data-testid", TestID: "old-name", Role: "textbox", Name: "Product name", Via: "testid"}},
+	}}
+	healed, err := route.RunWith(p, r, map[string]string{"name": "lamp"}, route.Options{Heal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healed != 1 || len(r.Lessons) != 1 {
+		t.Fatalf("want 1 healed step and 1 lesson, got %d / %+v", healed, r.Lessons)
+	}
+	if got := r.Steps[1].Target.TestID; got != "product-name" {
+		t.Fatalf("healed testid = %q, want product-name", got)
+	}
+	if r.Steps[1].Value != "{{name}}" {
+		t.Fatalf("healing must not change values; got %q", r.Steps[1].Value)
+	}
+	var out bytes.Buffer
+	if err := route.Run(p, r, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "fallback") {
+		t.Fatalf("second run should not need a fallback:\n%s", out.String())
+	}
+}

@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 )
@@ -69,10 +71,42 @@ type Page struct {
 	ctx context.Context
 	// Timeout bounds waiting for an element or text to appear.
 	Timeout time.Duration
+	// Quiet is how long the DOM must stay unchanged after an action. The next step
+	// waits for its own element anyway, so this only needs to cover short re-renders.
+	Quiet time.Duration
+
+	mu      sync.Mutex
+	dialogs []string // messages of alert/confirm/prompt dialogs, auto-accepted
 }
 
+// New wraps ctx. It accepts JavaScript dialogs (alert, confirm, prompt) as they open,
+// so a page never blocks the run; their text counts for ExpectText.
 func New(ctx context.Context) *Page {
-	return &Page{ctx: ctx, Timeout: 5 * time.Second}
+	p := &Page{ctx: ctx, Timeout: 5 * time.Second, Quiet: 50 * time.Millisecond}
+	events := chromedp.Events(ctx, page.JavascriptDialogOpening)
+	go func() {
+		for ev, err := range events {
+			if err != nil {
+				return
+			}
+			p.mu.Lock()
+			p.dialogs = append(p.dialogs, ev.Message)
+			p.mu.Unlock()
+			_, _ = chromedp.Call(ctx, page.HandleJavaScriptDialog, page.HandleJavaScriptDialogParams{Accept: true})
+		}
+	}()
+	return p
+}
+
+func (p *Page) sawDialog(text string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, m := range p.dialogs {
+		if strings.Contains(m, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // js builds a call like __xuse.fn("a", 1) with JSON-encoded args.
@@ -93,6 +127,9 @@ func (p *Page) timeoutMS() int { return int(p.Timeout / time.Millisecond) }
 
 // Goto navigates and waits for the page to settle.
 func (p *Page) Goto(url string) error {
+	p.mu.Lock()
+	p.dialogs = nil // a new page starts with no dialogs seen
+	p.mu.Unlock()
 	if _, err := chromedp.Run(p.ctx, chromedp.Navigate(url)); err != nil {
 		return err
 	}
@@ -216,13 +253,16 @@ func (p *Page) Press(key string) error {
 	return p.Settle()
 }
 
-// ExpectText waits until the page body contains text.
+// ExpectText waits until the page body, or a dialog the page opened, contains text.
 func (p *Page) ExpectText(text string) error {
+	if p.sawDialog(text) {
+		return nil
+	}
 	ok, err := eval[bool](p, js("hasText", text, p.timeoutMS()))
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if !ok && !p.sawDialog(text) {
 		return fmt.Errorf("text %q not on the page within %s", text, p.Timeout)
 	}
 	return nil
@@ -233,7 +273,7 @@ func (p *Page) ExpectText(text string) error {
 func (p *Page) Settle() error {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		_, err := eval[int](p, js("settle", 120, 3000))
+		_, err := eval[int](p, js("settle", int(p.Quiet/time.Millisecond), 3000))
 		if err == nil {
 			return nil
 		}

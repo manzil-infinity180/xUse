@@ -1,0 +1,8 @@
+<!doctype html><title>Login</title>
+<h1 id="msg">Please log in</h1>
+<p id="theme"></p>
+<button onclick="document.cookie='session=abc123; path=/; max-age=3600'; localStorage.setItem('theme','dark'); location.reload()">Log in</button>
+<script>
+  if (document.cookie.includes('session=abc123')) document.getElementById('msg').textContent = 'Welcome back';
+  document.getElementById('theme').textContent = 'theme: ' + (localStorage.getItem('theme') || 'none');
+</script>

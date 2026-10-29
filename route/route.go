@@ -47,29 +47,36 @@ type Route struct {
 	Name   string            `json:"name"`
 	Params map[string]string `json:"params,omitempty"`
 	Steps  []Step            `json:"steps"`
+	// Lessons are locator repairs made by healing replays, newest last.
+	Lessons []Lesson `json:"lessons,omitempty"`
 }
 
 // Parameterize replaces each recorded literal with {{name}} everywhere in the route.
 func (r *Route) Parameterize(params map[string]string) {
-	names := make([]string, 0, len(params))
-	for k := range params {
-		names = append(names, k)
-	}
-	// Longest literal first so "blue t-shirt" wins over "blue".
-	sort.Slice(names, func(i, j int) bool { return len(params[names[i]]) > len(params[names[j]]) })
 	if r.Params == nil {
 		r.Params = map[string]string{}
 	}
+	for k, v := range params {
+		r.Params[k] = v
+	}
+	for i := range r.Steps {
+		parameterizeStep(&r.Steps[i], params)
+	}
+}
+
+// parameterizeStep replaces literal values with {{name}}, longest literal first so
+// "blue t-shirt" wins over "blue".
+func parameterizeStep(s *Step, params map[string]string) {
+	names := make([]string, 0, len(params))
+	for k, v := range params {
+		if v != "" {
+			names = append(names, k)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return len(params[names[i]]) > len(params[names[j]]) })
 	for _, k := range names {
-		lit := params[k]
-		r.Params[k] = lit
-		if lit == "" {
-			continue
-		}
-		ph := "{{" + k + "}}"
-		for i := range r.Steps {
-			eachString(&r.Steps[i], func(s string) string { return strings.ReplaceAll(s, lit, ph) })
-		}
+		lit, ph := params[k], "{{"+k+"}}"
+		eachString(s, func(str string) string { return strings.ReplaceAll(str, lit, ph) })
 	}
 }
 
@@ -124,23 +131,29 @@ func (e *StepError) Error() string {
 
 func (e *StepError) Unwrap() error { return e.Err }
 
-// Do runs one step and returns the locator strategy used, if any.
-func Do(p *engine.Page, s Step) (via string, err error) {
-	if s.Action == "goto" {
-		return "", p.Goto(s.URL)
-	}
-	if s.Action == "press" {
-		return "", p.Press(s.Key)
-	}
-	if s.Action == "expect" {
-		return "", p.ExpectText(s.Text)
+// Do runs one step. For element steps it returns the strategy that found the element,
+// and, when that differs from the recorded one, a fresh locator for the element (taken
+// before acting, since a click may remove it).
+func Do(p *engine.Page, s Step) (via string, healed *engine.Locator, err error) {
+	switch s.Action {
+	case "goto":
+		return "", nil, p.Goto(s.URL)
+	case "press":
+		return "", nil, p.Press(s.Key)
+	case "expect":
+		return "", nil, p.ExpectText(s.Text)
 	}
 	if s.Target == nil {
-		return "", fmt.Errorf("step %q has no target", s.Action)
+		return "", nil, fmt.Errorf("step %q has no target", s.Action)
 	}
 	ref, via, err := p.Find(s.Target)
 	if err != nil {
-		return "", err
+		return "", nil, err
+	}
+	if s.Target.Via != "" && via != s.Target.Via {
+		if l, lerr := p.LocatorOf(ref); lerr == nil && l.Via != "" {
+			healed = l
+		}
 	}
 	switch s.Action {
 	case "click":
@@ -152,31 +165,82 @@ func Do(p *engine.Page, s Step) (via string, err error) {
 	default:
 		err = fmt.Errorf("unknown action %q", s.Action)
 	}
-	return via, err
+	return via, healed, err
 }
 
-// Run replays the route on the page. It writes one line per step to out.
+// Lesson records a locator that stopped working and what replaced it.
+type Lesson struct {
+	Step int       `json:"step"`
+	Was  string    `json:"was"` // strategy recorded before
+	Now  string    `json:"now"` // strategy that worked
+	Note string    `json:"note"`
+	At   time.Time `json:"at"`
+}
+
+// Options control a replay.
+type Options struct {
+	Out io.Writer
+	// Heal rewrites locators that only matched through a fallback and records a lesson.
+	// The caller saves the route if Healed reports changes.
+	Heal bool
+}
+
+// Run replays the route on the page, one line per step to out.
 func Run(p *engine.Page, r *Route, vars map[string]string, out io.Writer) error {
+	_, err := RunWith(p, r, vars, Options{Out: out})
+	return err
+}
+
+// RunWith replays the route and returns how many steps were healed.
+func RunWith(p *engine.Page, r *Route, vars map[string]string, o Options) (healed int, err error) {
+	out := o.Out
+	if out == nil {
+		out = io.Discard
+	}
 	start := time.Now()
 	for i, raw := range r.Steps {
 		s, err := r.Render(raw, vars)
 		if err != nil {
-			return &StepError{i + 1, raw, err}
+			return healed, &StepError{i + 1, raw, err}
 		}
 		t := time.Now()
-		via, err := Do(p, s)
+		via, fresh, err := Do(p, s)
 		if err != nil {
 			fmt.Fprintf(out, "%3d FAIL %-7s %s\n", i+1, s.Action, s.Describe())
-			return &StepError{i + 1, s, err}
+			return healed, &StepError{i + 1, s, err}
 		}
 		note := ""
-		if via != "" && s.Target != nil && s.Target.Via != "" && via != s.Target.Via {
+		if fresh != nil {
 			note = "  (fallback: " + via + ")"
+			if o.Heal {
+				// Store the new locator with the run's values turned back into {{params}}.
+				step := Step{Action: raw.Action, Target: fresh}
+				parameterizeStep(&step, r.values(vars))
+				r.Steps[i].Target = step.Target
+				r.Lessons = append(r.Lessons, Lesson{
+					Step: i + 1, Was: raw.Target.Via, Now: fresh.Via, At: time.Now().UTC(),
+					Note: fmt.Sprintf("%s no longer matched %s; now found via %s", raw.Target.Via, raw.Target, fresh.Via),
+				})
+				healed++
+				note += " healed"
+			}
 		}
 		fmt.Fprintf(out, "%3d ok   %-7s %-50s %5dms%s\n", i+1, s.Action, s.Describe(), time.Since(t).Milliseconds(), note)
 	}
 	fmt.Fprintf(out, "PASS %d/%d steps in %dms · 0 LLM tokens\n", len(r.Steps), len(r.Steps), time.Since(start).Milliseconds())
-	return nil
+	return healed, nil
+}
+
+// values merges recorded defaults with the run's vars.
+func (r *Route) values(vars map[string]string) map[string]string {
+	m := map[string]string{}
+	for k, v := range r.Params {
+		m[k] = v
+	}
+	for k, v := range vars {
+		m[k] = v
+	}
+	return m
 }
 
 // Path returns the file for a route name inside dir. A name ending in .json is used as a path.

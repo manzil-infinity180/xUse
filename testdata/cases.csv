@@ -1,0 +1,5 @@
+_name,name,price,_expect
+blue shirt,blue t-shirt,25,
+unicode name,café ☕ mug,7,
+empty name,,5,fail
+negative price,lamp,-3,fail

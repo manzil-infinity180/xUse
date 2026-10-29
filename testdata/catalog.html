@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Catalog</title>
+<style>body{font-family:sans-serif} table{border-collapse:collapse} td,th{padding:4px 8px;border-bottom:1px solid #ddd} .badge{padding:2px 6px;border-radius:8px;background:#eef}</style>
+</head><body>
+<!-- A typical admin list page: nav, filters, a 60-row table with row actions, pagination. -->
+<header><nav aria-label="Main">
+  <a href="#">Dashboard</a><a href="#">Products</a><a href="#">Orders</a><a href="#">Customers</a>
+  <a href="#">Inventory</a><a href="#">Reports</a><a href="#">Settings</a>
+</nav></header>
+<main>
+  <h1>Products</h1>
+  <section aria-label="Filters">
+    <input type="search" placeholder="Search products">
+    <select aria-label="Category"><option>All</option><option>Apparel</option><option>Home</option></select>
+    <select aria-label="Stock"><option>Any stock</option><option>In stock</option><option>Out of stock</option></select>
+    <button>Apply filters</button><button>Reset</button><button>Add product</button>
+  </section>
+  <table><thead><tr><th><input type="checkbox" aria-label="Select all"></th><th>Name</th><th>SKU</th><th>Price</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead>
+  <tbody id="rows"></tbody></table>
+  <nav aria-label="Pagination"><button>Previous</button><button>1</button><button>2</button><button>3</button><button>Next</button></nav>
+</main>
+<script>
+  const items = ['T-shirt','Mug','Lamp','Notebook','Backpack','Cap','Bottle','Candle','Poster','Socks'];
+  const colors = ['Blue','Red','Green','Black','White','Grey'];
+  const rows = document.getElementById('rows');
+  for (let i = 0; i < 60; i++) {
+    const name = colors[i % colors.length] + ' ' + items[i % items.length] + ' ' + (i + 1);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input type="checkbox" aria-label="Select ${name}"></td>
+      <td><a href="#p${i}">${name}</a><div class="muted">Updated ${i % 28 + 1} days ago</div></td>
+      <td>SKU-${1000 + i}</td><td>$${(9.5 + i).toFixed(2)}</td><td>${(i * 7) % 50}</td>
+      <td><span class="badge">${i % 3 ? 'Active' : 'Draft'}</span></td>
+      <td><button aria-label="Edit ${name}">Edit</button><button aria-label="Delete ${name}">Delete</button></td>`;
+    rows.append(tr);
+  }
+</script>
+</body></html>
