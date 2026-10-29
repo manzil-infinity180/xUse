@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Products</title></head>
+<body>
+  <h1>Products</h1>
+  <form id="product-form">
+    <label for="pname">Product name</label>
+    <input id="pname" data-testid="product-name">
+    <label>Price <input name="price" type="number" data-testid="product-price"></label>
+    <select data-testid="product-status" aria-label="Status">
+      <option value="draft">Draft</option>
+      <option value="active">Active</option>
+    </select>
+    <button type="submit" data-testid="save-product">Save product</button>
+  </form>
+  <ul id="list"></ul>
+  <script>
+    // Fake API: the row appears 300ms after submit, so replays must wait for it.
+    const f = document.getElementById('product-form');
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = document.getElementById('pname').value;
+      const price = f.querySelector('[name=price]').value;
+      const status = f.querySelector('select').value;
+      if (!name) { alert('name required'); return; }
+      setTimeout(() => {
+        const li = document.createElement('li');
+        li.textContent = `Created ${name} at $${price} (${status})`;
+        document.getElementById('list').append(li);
+        f.reset();
+      }, 300);
+    });
+  </script>
+</body>
+</html>
